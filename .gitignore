@@ -1,0 +1,9 @@
+node_modules/
+.env
+backend/node-red/data/*
+!backend/node-red/data/.gitkeep
+!backend/node-red/data/flows.json
+dist/
+.angular/
+android/
+*.log
