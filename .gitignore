@@ -3,6 +3,7 @@ node_modules/
 backend/node-red/data/*
 !backend/node-red/data/.gitkeep
 !backend/node-red/data/flows.json
+!backend/node-red/data/settings.js
 dist/
 .angular/
 android/

@@ -1,0 +1,47 @@
+[
+  {
+    "id": "hc_tab",
+    "type": "tab",
+    "label": "Health Test"
+  },
+  {
+    "id": "hc_in",
+    "type": "http in",
+    "z": "hc_tab",
+    "name": "GET /api/health/db",
+    "url": "/api/health/db",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 80,
+    "wires": [["hc_fn"]]
+  },
+  {
+    "id": "hc_fn",
+    "type": "function",
+    "z": "hc_tab",
+    "name": "Query MySQL",
+    "func": "const mysql = global.get('mysql');\nlet conn;\ntry {\n  conn = await mysql.createConnection({\n    host: env.get('MYSQL_HOST'),\n    user: env.get('MYSQL_USER'),\n    password: env.get('MYSQL_PASSWORD'),\n    database: env.get('MYSQL_DATABASE')\n  });\n  const [rows] = await conn.execute('SELECT id, note FROM healthcheck WHERE id = ?', [1]);\n  msg.statusCode = 200;\n  msg.payload = rows;\n} catch (err) {\n  node.error(err);\n  msg.statusCode = 500;\n  msg.payload = { error: 'internal_error' };\n} finally {\n  if (conn) await conn.end();\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 380,
+    "y": 80,
+    "wires": [["hc_out"]]
+  },
+  {
+    "id": "hc_out",
+    "type": "http response",
+    "z": "hc_tab",
+    "name": "",
+    "statusCode": "",
+    "headers": {},
+    "x": 590,
+    "y": 80,
+    "wires": []
+  }
+]
