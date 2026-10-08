@@ -43,8 +43,21 @@ services:
     networks:
       - ss-net
 
+  frontend:
+    build:
+      context: .
+      dockerfile: ./docker/frontend/Dockerfile
+    container_name: ss-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - node-red
+    networks:
+      - ss-net
+
 volumes:
   mysql_data:
 
 networks:
-  ss-net:
+  ss-net:
