@@ -1,13 +1,81 @@
 [
   {
-    "id": "hc_tab",
+    "id": "tab_auth",
     "type": "tab",
-    "label": "Health Test"
+    "label": "Auth API",
+    "disabled": false,
+    "info": "Authentication endpoints: /api/auth/register, /api/auth/login, /api/auth/me"
+  },
+  {
+    "id": "tab_health",
+    "type": "tab",
+    "label": "Health Test",
+    "disabled": false,
+    "info": ""
+  },
+  {
+    "id": "subflow_jwt_verify",
+    "type": "subflow",
+    "name": "Verify JWT Token",
+    "info": "Subflow for JWT validation: reads Bearer token, verifies HS256, validates sub as positive integer, sets msg.userId",
+    "category": "",
+    "in": [
+      {
+        "x": 60,
+        "y": 80,
+        "wires": [
+          {
+            "id": "sf_jwt_fn"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 480,
+        "y": 60,
+        "wires": [
+          {
+            "id": "sf_jwt_fn",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 480,
+        "y": 120,
+        "wires": [
+          {
+            "id": "sf_jwt_fn",
+            "port": 1
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "sf_jwt_fn",
+    "type": "function",
+    "z": "subflow_jwt_verify",
+    "name": "Verify JWT & Extract userId",
+    "func": "const jwt = global.get('jwt');\n\nconst authHeader = (msg.req && msg.req.headers && msg.req.headers['authorization']) || '';\nconst genericError = 'การยืนยันตัวตนล้มเหลว กรุณาเข้าสู่ระบบใหม่';\n\nif (!authHeader || !authHeader.startsWith('Bearer ')) {\n    node.warn('JWT Verify Failed: Missing or invalid Authorization header format');\n    msg.statusCode = 401;\n    msg.payload = { error: genericError };\n    return [null, msg];\n}\n\nconst token = authHeader.substring(7).trim();\nconst secret = env.get('JWT_SECRET');\n\ntry {\n    const decoded = jwt.verify(token, secret, {\n        algorithms: ['HS256']\n    });\n\n    const subNum = Number(decoded.sub);\n    if (!Number.isInteger(subNum) || subNum <= 0) {\n        node.warn('JWT Verify Failed: Subject is not a valid positive integer: ' + decoded.sub);\n        msg.statusCode = 401;\n        msg.payload = { error: genericError };\n        return [null, msg];\n    }\n\n    msg.userId = subNum;\n    return [msg, null];\n} catch (err) {\n    node.warn('JWT Verify Error: ' + (err.message || err));\n    msg.statusCode = 401;\n    msg.payload = { error: genericError };\n    return [null, msg];\n}",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 260,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
   },
   {
     "id": "hc_in",
     "type": "http in",
-    "z": "hc_tab",
+    "z": "tab_health",
     "name": "GET /api/health/db",
     "url": "/api/health/db",
     "method": "get",
@@ -20,9 +88,9 @@
   {
     "id": "hc_fn",
     "type": "function",
-    "z": "hc_tab",
+    "z": "tab_health",
     "name": "Query MySQL",
-    "func": "const mysql = global.get('mysql');\nlet conn;\ntry {\n  conn = await mysql.createConnection({\n    host: env.get('MYSQL_HOST'),\n    user: env.get('MYSQL_USER'),\n    password: env.get('MYSQL_PASSWORD'),\n    database: env.get('MYSQL_DATABASE')\n  });\n  const [rows] = await conn.execute('SELECT id, note FROM healthcheck WHERE id = ?', [1]);\n  msg.statusCode = 200;\n  msg.payload = rows;\n} catch (err) {\n  node.error(err);\n  msg.statusCode = 500;\n  msg.payload = { error: 'internal_error' };\n} finally {\n  if (conn) await conn.end();\n}\nreturn msg;",
+    "func": "const mysql = global.get('mysql');\nlet conn;\ntry {\n  conn = await mysql.createConnection({\n    host: env.get('MYSQL_HOST'),\n    user: env.get('MYSQL_USER'),\n    password: env.get('MYSQL_PASSWORD'),\n    database: env.get('MYSQL_DATABASE')\n  });\n  const [rows] = await conn.execute('SELECT 1 as status, \"connected\" as message');\n  msg.statusCode = 200;\n  msg.payload = rows;\n} catch (err) {\n  node.error(err);\n  msg.statusCode = 500;\n  msg.payload = { error: 'internal_error' };\n} finally {\n  if (conn) await conn.end();\n}\nreturn msg;",
     "outputs": 1,
     "timeout": 0,
     "noerr": 0,
@@ -36,12 +104,150 @@
   {
     "id": "hc_out",
     "type": "http response",
-    "z": "hc_tab",
+    "z": "tab_health",
     "name": "",
     "statusCode": "",
     "headers": {},
     "x": 590,
     "y": 80,
+    "wires": []
+  },
+  {
+    "id": "auth_reg_in",
+    "type": "http in",
+    "z": "tab_auth",
+    "name": "POST /api/auth/register",
+    "url": "/api/auth/register",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 100,
+    "wires": [["auth_reg_fn"]]
+  },
+  {
+    "id": "auth_reg_fn",
+    "type": "function",
+    "z": "tab_auth",
+    "name": "Register Handler",
+    "func": "const mysql = global.get('mysql');\nconst bcrypt = global.get('bcrypt');\n\nconst body = msg.payload || {};\nconst name = typeof body.name === 'string' ? body.name.trim() : '';\nconst email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';\nconst password = typeof body.password === 'string' ? body.password : '';\n\n// 1. Validation\nconst emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nif (!name) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'กรุณากรอกชื่อ-นามสกุล' };\n    return msg;\n}\nif (name.length > 100) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'ชื่อ-นามสกุลต้องมีความยาวไม่เกิน 100 ตัวอักษร' };\n    return msg;\n}\nif (!email || !emailRegex.test(email)) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'รูปแบบอีเมลไม่ถูกต้อง' };\n    return msg;\n}\nif (email.length > 191) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'อีเมลต้องมีความยาวไม่เกิน 191 ตัวอักษร' };\n    return msg;\n}\n\nconst passwordBytes = Buffer.byteLength(password, 'utf8');\nif (passwordBytes < 8) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษร' };\n    return msg;\n}\nif (passwordBytes > 72) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'รหัสผ่านต้องมีขนาดไม่เกิน 72 ไบต์' };\n    return msg;\n}\n\nlet conn;\ntry {\n    conn = await mysql.createConnection({\n        host: env.get('MYSQL_HOST'),\n        user: env.get('MYSQL_USER'),\n        password: env.get('MYSQL_PASSWORD'),\n        database: env.get('MYSQL_DATABASE')\n    });\n\n    // 2. Hash Password (cost 10)\n    const passwordHash = await bcrypt.hash(password, 10);\n\n    // 3. Parameterized Query Insert User\n    const [result] = await conn.execute(\n        'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',\n        [name, email, passwordHash]\n    );\n\n    msg.statusCode = 201;\n    msg.payload = {\n        message: 'สมัครสมาชิกสำเร็จ',\n        user: {\n            id: result.insertId,\n            name: name,\n            email: email\n        }\n    };\n} catch (err) {\n    // Check duplicate email constraint (MySQL ER_DUP_ENTRY = 1062)\n    if (err.errno === 1062 || err.code === 'ER_DUP_ENTRY') {\n        msg.statusCode = 409;\n        msg.payload = { error: 'อีเมลนี้ถูกใช้งานแล้วในระบบ' };\n    } else {\n        node.error('Register error: ' + (err.message || err));\n        msg.statusCode = 500;\n        msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n    }\n} finally {\n    if (conn) await conn.end();\n}\n\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 390,
+    "y": 100,
+    "wires": [["auth_reg_out"]]
+  },
+  {
+    "id": "auth_reg_out",
+    "type": "http response",
+    "z": "tab_auth",
+    "name": "",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 610,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "auth_login_in",
+    "type": "http in",
+    "z": "tab_auth",
+    "name": "POST /api/auth/login",
+    "url": "/api/auth/login",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 200,
+    "wires": [["auth_login_fn"]]
+  },
+  {
+    "id": "auth_login_fn",
+    "type": "function",
+    "z": "tab_auth",
+    "name": "Login Handler",
+    "func": "const mysql = global.get('mysql');\nconst bcrypt = global.get('bcrypt');\nconst jwt = global.get('jwt');\n\nconst body = msg.payload || {};\nconst email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';\nconst password = typeof body.password === 'string' ? body.password : '';\n\n// 1. Validation\nif (!email || !password) {\n    msg.statusCode = 400;\n    msg.payload = { error: 'กรุณากรอกอีเมลและรหัสผ่าน' };\n    return msg;\n}\n\nconst genericAuthError = 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';\n// Valid bcrypt cost 10 dummy hash for timing attack mitigation\nconst dummyHash = '$2b$10$9UOST935FBlnR3pYKmNh4e86NrXqRYginu7/1LIBruOwR0jDux4zy';\n\nlet conn;\ntry {\n    conn = await mysql.createConnection({\n        host: env.get('MYSQL_HOST'),\n        user: env.get('MYSQL_USER'),\n        password: env.get('MYSQL_PASSWORD'),\n        database: env.get('MYSQL_DATABASE')\n    });\n\n    // 2. Query user by email (Parameterized Query)\n    const [rows] = await conn.execute(\n        'SELECT id, name, email, password_hash, notify_enabled FROM users WHERE email = ? LIMIT 1',\n        [email]\n    );\n\n    if (rows.length === 0) {\n        // Constant-time compare against dummy hash\n        await bcrypt.compare(password, dummyHash);\n        msg.statusCode = 401;\n        msg.payload = { error: genericAuthError };\n        return msg;\n    }\n\n    const user = rows[0];\n\n    // 3. Verify password with bcrypt\n    const isPasswordValid = await bcrypt.compare(password, user.password_hash);\n    if (!isPasswordValid) {\n        msg.statusCode = 401;\n        msg.payload = { error: genericAuthError };\n        return msg;\n    }\n\n    // 4. Generate JWT Token with sub as String(user.id) only\n    const secret = env.get('JWT_SECRET');\n    const expiresIn = env.get('JWT_EXPIRES_IN') || '2h';\n    const payload = {\n        sub: String(user.id)\n    };\n\n    const token = jwt.sign(payload, secret, { expiresIn: expiresIn });\n\n    msg.statusCode = 200;\n    msg.payload = {\n        message: 'เข้าสู่ระบบสำเร็จ',\n        token: token,\n        user: {\n            id: user.id,\n            name: user.name,\n            email: user.email,\n            notify_enabled: Boolean(user.notify_enabled)\n        }\n    };\n} catch (err) {\n    node.error('Login error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n} finally {\n    if (conn) await conn.end();\n}\n\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 380,
+    "y": 200,
+    "wires": [["auth_login_out"]]
+  },
+  {
+    "id": "auth_login_out",
+    "type": "http response",
+    "z": "tab_auth",
+    "name": "",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 610,
+    "y": 200,
+    "wires": []
+  },
+  {
+    "id": "auth_me_in",
+    "type": "http in",
+    "z": "tab_auth",
+    "name": "GET /api/auth/me",
+    "url": "/api/auth/me",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 140,
+    "y": 300,
+    "wires": [["auth_me_subflow"]]
+  },
+  {
+    "id": "auth_me_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_auth",
+    "name": "Verify JWT",
+    "x": 340,
+    "y": 300,
+    "wires": [
+      ["auth_me_fn"],
+      ["auth_resp_common"]
+    ]
+  },
+  {
+    "id": "auth_me_fn",
+    "type": "function",
+    "z": "tab_auth",
+    "name": "Get User Profile",
+    "func": "const mysql = global.get('mysql');\n\nlet conn;\ntry {\n    conn = await mysql.createConnection({\n        host: env.get('MYSQL_HOST'),\n        user: env.get('MYSQL_USER'),\n        password: env.get('MYSQL_PASSWORD'),\n        database: env.get('MYSQL_DATABASE')\n    });\n\n    // SELECT only non-sensitive columns, NO password_hash\n    const [rows] = await conn.execute(\n        'SELECT id, name, email, notify_enabled, created_at FROM users WHERE id = ? LIMIT 1',\n        [msg.userId]\n    );\n\n    if (rows.length === 0) {\n        node.warn('User not found in DB for valid token userId: ' + msg.userId);\n        msg.statusCode = 401;\n        msg.payload = { error: 'การยืนยันตัวตนล้มเหลว กรุณาเข้าสู่ระบบใหม่' };\n        return msg;\n    }\n\n    const user = rows[0];\n    msg.statusCode = 200;\n    msg.payload = {\n        id: user.id,\n        name: user.name,\n        email: user.email,\n        notify_enabled: Boolean(user.notify_enabled),\n        created_at: user.created_at\n    };\n} catch (err) {\n    node.error('Get profile error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n} finally {\n    if (conn) await conn.end();\n}\n\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 520,
+    "y": 280,
+    "wires": [["auth_resp_common"]]
+  },
+  {
+    "id": "auth_resp_common",
+    "type": "http response",
+    "z": "tab_auth",
+    "name": "Auth Response",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 720,
+    "y": 300,
     "wires": []
   }
 ]
