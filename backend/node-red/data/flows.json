@@ -7,6 +7,27 @@
     "info": "Authentication endpoints: /api/auth/register, /api/auth/login, /api/auth/me"
   },
   {
+    "id": "tab_goals",
+    "type": "tab",
+    "label": "Goals API",
+    "disabled": false,
+    "info": "CRUD operations for savings goals"
+  },
+  {
+    "id": "tab_savings",
+    "type": "tab",
+    "label": "Savings API",
+    "disabled": false,
+    "info": "Transactions management"
+  },
+  {
+    "id": "tab_dashboard",
+    "type": "tab",
+    "label": "Dashboard API",
+    "disabled": false,
+    "info": "Dashboard and Analysis endpoints"
+  },
+  {
     "id": "tab_health",
     "type": "tab",
     "label": "Health Test",
@@ -248,6 +269,455 @@
     },
     "x": 720,
     "y": 300,
+    "wires": []
+  },
+  {
+    "id": "goals_get_in",
+    "type": "http in",
+    "z": "tab_goals",
+    "name": "GET /api/goals",
+    "url": "/api/goals",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 80,
+    "wires": [["goals_get_subflow"]]
+  },
+  {
+    "id": "goals_get_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_goals",
+    "name": "Verify JWT",
+    "x": 310,
+    "y": 80,
+    "wires": [
+      ["goals_get_fn"],
+      ["goals_resp"]
+    ]
+  },
+  {
+    "id": "goals_get_fn",
+    "type": "function",
+    "z": "tab_goals",
+    "name": "List Goals Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst dates = global.get('dates');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\nconst statusFilter = msg.req.query.status;\n\ntry {\n    let sql = `\n        SELECT g.*, COALESCE(SUM(t.amount), 0) AS tx_sum\n        FROM savings_goals g\n        LEFT JOIN savings_transactions t ON g.id = t.goal_id\n        WHERE g.user_id = ?\n    `;\n    const params = [msg.userId];\n    if (statusFilter === 'active' || statusFilter === 'completed') {\n        sql += ' AND g.status = ?';\n        params.push(statusFilter);\n    }\n    sql += ' GROUP BY g.id ORDER BY g.created_at DESC';\n\n    const [rows] = await pool.execute(sql, params);\n    const result = rows.map(goal => {\n        const metrics = calc.computeGoalMetrics(goal, goal.tx_sum, today);\n        return {\n            id: goal.id,\n            name: goal.name,\n            target_amount: Number(goal.target_amount),\n            initial_amount: Number(goal.initial_amount),\n            income: Number(goal.income),\n            expense: Number(goal.expense),\n            saving_capacity: Number(goal.saving_capacity),\n            start_date: goal.start_date instanceof Date ? goal.start_date.toISOString().split('T')[0] : String(goal.start_date),\n            target_date: goal.target_date instanceof Date ? goal.target_date.toISOString().split('T')[0] : String(goal.target_date),\n            status: goal.status,\n            created_at: goal.created_at,\n            updated_at: goal.updated_at,\n            metrics: metrics\n        };\n    });\n\n    msg.statusCode = 200;\n    msg.payload = result;\n} catch (err) {\n    node.error('List goals error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 510,
+    "y": 70,
+    "wires": [["goals_resp"]]
+  },
+  {
+    "id": "goals_post_in",
+    "type": "http in",
+    "z": "tab_goals",
+    "name": "POST /api/goals",
+    "url": "/api/goals",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 130,
+    "y": 180,
+    "wires": [["goals_post_subflow"]]
+  },
+  {
+    "id": "goals_post_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_goals",
+    "name": "Verify JWT",
+    "x": 310,
+    "y": 180,
+    "wires": [
+      ["goals_post_fn"],
+      ["goals_resp"]
+    ]
+  },
+  {
+    "id": "goals_post_fn",
+    "type": "function",
+    "z": "tab_goals",
+    "name": "Create Goal Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst validate = global.get('validate');\nconst dates = global.get('dates');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\n\nconst val = validate.validateGoalPayload(msg.payload);\nif (!val.valid) {\n    msg.statusCode = 400;\n    msg.payload = { error: val.error };\n    return msg;\n}\n\nconst data = val.sanitized;\nconst lifecycleStatus = data.initial_amount >= data.target_amount ? 'completed' : 'active';\n\ntry {\n    const [res] = await pool.execute(`\n        INSERT INTO savings_goals \n        (user_id, name, target_amount, initial_amount, income, expense, saving_capacity, start_date, target_date, status)\n        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n    `, [\n        msg.userId,\n        data.name,\n        data.target_amount,\n        data.initial_amount,\n        data.income,\n        data.expense,\n        data.saving_capacity,\n        data.start_date,\n        data.target_date,\n        lifecycleStatus\n    ]);\n\n    const goalObj = {\n        id: res.insertId,\n        user_id: msg.userId,\n        ...data,\n        status: lifecycleStatus\n    };\n    const metrics = calc.computeGoalMetrics(goalObj, 0, today);\n\n    msg.statusCode = 201;\n    msg.payload = {\n        ...goalObj,\n        metrics: metrics\n    };\n} catch (err) {\n    node.error('Create goal error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 510,
+    "y": 170,
+    "wires": [["goals_resp"]]
+  },
+  {
+    "id": "goals_detail_in",
+    "type": "http in",
+    "z": "tab_goals",
+    "name": "GET /api/goals/:id",
+    "url": "/api/goals/:id",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 140,
+    "y": 280,
+    "wires": [["goals_detail_subflow"]]
+  },
+  {
+    "id": "goals_detail_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_goals",
+    "name": "Verify JWT",
+    "x": 310,
+    "y": 280,
+    "wires": [
+      ["goals_detail_fn"],
+      ["goals_resp"]
+    ]
+  },
+  {
+    "id": "goals_detail_fn",
+    "type": "function",
+    "z": "tab_goals",
+    "name": "Get Goal Detail Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst dates = global.get('dates');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\nconst goalId = Number(msg.req.params.id);\n\nif (!Number.isInteger(goalId) || goalId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n    return msg;\n}\n\ntry {\n    const [rows] = await pool.execute(`\n        SELECT g.*, COALESCE(SUM(t.amount), 0) AS tx_sum, COUNT(t.id) AS tx_count\n        FROM savings_goals g\n        LEFT JOIN savings_transactions t ON g.id = t.goal_id\n        WHERE g.id = ? AND g.user_id = ?\n        GROUP BY g.id\n        LIMIT 1\n    `, [goalId, msg.userId]);\n\n    if (rows.length === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n        return msg;\n    }\n\n    const goal = rows[0];\n    const metrics = calc.computeGoalMetrics(goal, goal.tx_sum, today);\n\n    msg.statusCode = 200;\n    msg.payload = {\n        id: goal.id,\n        name: goal.name,\n        target_amount: Number(goal.target_amount),\n        initial_amount: Number(goal.initial_amount),\n        income: Number(goal.income),\n        expense: Number(goal.expense),\n        saving_capacity: Number(goal.saving_capacity),\n        start_date: goal.start_date instanceof Date ? goal.start_date.toISOString().split('T')[0] : String(goal.start_date),\n        target_date: goal.target_date instanceof Date ? goal.target_date.toISOString().split('T')[0] : String(goal.target_date),\n        status: goal.status,\n        transaction_count: Number(goal.tx_count),\n        created_at: goal.created_at,\n        updated_at: goal.updated_at,\n        metrics: metrics\n    };\n} catch (err) {\n    node.error('Get goal detail error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 510,
+    "y": 270,
+    "wires": [["goals_resp"]]
+  },
+  {
+    "id": "goals_put_in",
+    "type": "http in",
+    "z": "tab_goals",
+    "name": "PUT /api/goals/:id",
+    "url": "/api/goals/:id",
+    "method": "put",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 140,
+    "y": 380,
+    "wires": [["goals_put_subflow"]]
+  },
+  {
+    "id": "goals_put_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_goals",
+    "name": "Verify JWT",
+    "x": 310,
+    "y": 380,
+    "wires": [
+      ["goals_put_fn"],
+      ["goals_resp"]
+    ]
+  },
+  {
+    "id": "goals_put_fn",
+    "type": "function",
+    "z": "tab_goals",
+    "name": "Update Goal Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst validate = global.get('validate');\nconst dates = global.get('dates');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\nconst goalId = Number(msg.req.params.id);\n\nif (!Number.isInteger(goalId) || goalId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n    return msg;\n}\n\nconst val = validate.validateGoalPayload(msg.payload);\nif (!val.valid) {\n    msg.statusCode = 400;\n    msg.payload = { error: val.error };\n    return msg;\n}\nconst data = val.sanitized;\n\ntry {\n    // Check ownership and existing tx sum\n    const [existing] = await pool.execute(`\n        SELECT g.id, COALESCE(SUM(t.amount), 0) AS tx_sum\n        FROM savings_goals g\n        LEFT JOIN savings_transactions t ON g.id = t.goal_id\n        WHERE g.id = ? AND g.user_id = ?\n        GROUP BY g.id\n        LIMIT 1\n    `, [goalId, msg.userId]);\n\n    if (existing.length === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n        return msg;\n    }\n\n    const txSum = Number(existing[0].tx_sum);\n    const totalCurrent = data.initial_amount + txSum;\n    const newLifecycleStatus = totalCurrent >= data.target_amount ? 'completed' : 'active';\n\n    await pool.execute(`\n        UPDATE savings_goals\n        SET name = ?, target_amount = ?, initial_amount = ?, income = ?, expense = ?, saving_capacity = ?, start_date = ?, target_date = ?, status = ?\n        WHERE id = ? AND user_id = ?\n    `, [\n        data.name,\n        data.target_amount,\n        data.initial_amount,\n        data.income,\n        data.expense,\n        data.saving_capacity,\n        data.start_date,\n        data.target_date,\n        newLifecycleStatus,\n        goalId,\n        msg.userId\n    ]);\n\n    const updatedGoal = { id: goalId, user_id: msg.userId, ...data, status: newLifecycleStatus };\n    const metrics = calc.computeGoalMetrics(updatedGoal, txSum, today);\n\n    msg.statusCode = 200;\n    msg.payload = { ...updatedGoal, metrics: metrics };\n} catch (err) {\n    node.error('Update goal error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 510,
+    "y": 370,
+    "wires": [["goals_resp"]]
+  },
+  {
+    "id": "goals_del_in",
+    "type": "http in",
+    "z": "tab_goals",
+    "name": "DELETE /api/goals/:id",
+    "url": "/api/goals/:id",
+    "method": "delete",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 140,
+    "y": 480,
+    "wires": [["goals_del_subflow"]]
+  },
+  {
+    "id": "goals_del_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_goals",
+    "name": "Verify JWT",
+    "x": 310,
+    "y": 480,
+    "wires": [
+      ["goals_del_fn"],
+      ["goals_resp"]
+    ]
+  },
+  {
+    "id": "goals_del_fn",
+    "type": "function",
+    "z": "tab_goals",
+    "name": "Delete Goal Handler",
+    "func": "const db = global.get('db');\nconst pool = db.getPool();\nconst goalId = Number(msg.req.params.id);\n\nif (!Number.isInteger(goalId) || goalId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n    return msg;\n}\n\ntry {\n    const [res] = await pool.execute(\n        'DELETE FROM savings_goals WHERE id = ? AND user_id = ?',\n        [goalId, msg.userId]\n    );\n    if (res.affectedRows === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n        return msg;\n    }\n    msg.statusCode = 204;\n    msg.payload = '';\n} catch (err) {\n    node.error('Delete goal error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 510,
+    "y": 470,
+    "wires": [["goals_resp"]]
+  },
+  {
+    "id": "goals_resp",
+    "type": "http response",
+    "z": "tab_goals",
+    "name": "Goals Response",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 750,
+    "y": 280,
+    "wires": []
+  },
+  {
+    "id": "savings_get_in",
+    "type": "http in",
+    "z": "tab_savings",
+    "name": "GET /api/goals/:id/savings",
+    "url": "/api/goals/:id/savings",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 80,
+    "wires": [["savings_get_subflow"]]
+  },
+  {
+    "id": "savings_get_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_savings",
+    "name": "Verify JWT",
+    "x": 350,
+    "y": 80,
+    "wires": [
+      ["savings_get_fn"],
+      ["savings_resp"]
+    ]
+  },
+  {
+    "id": "savings_get_fn",
+    "type": "function",
+    "z": "tab_savings",
+    "name": "List Savings Handler",
+    "func": "const db = global.get('db');\nconst pool = db.getPool();\nconst goalId = Number(msg.req.params.id);\n\nif (!Number.isInteger(goalId) || goalId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n    return msg;\n}\n\ntry {\n    // Check goal ownership\n    const [goals] = await pool.execute('SELECT id FROM savings_goals WHERE id = ? AND user_id = ? LIMIT 1', [goalId, msg.userId]);\n    if (goals.length === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n        return msg;\n    }\n\n    const [rows] = await pool.execute(`\n        SELECT id, goal_id, amount, saving_date, note, created_at\n        FROM savings_transactions\n        WHERE goal_id = ?\n        ORDER BY saving_date DESC, created_at DESC\n    `, [goalId]);\n\n    msg.statusCode = 200;\n    msg.payload = rows.map(r => ({\n        id: r.id,\n        goal_id: r.goal_id,\n        amount: Number(r.amount),\n        saving_date: r.saving_date instanceof Date ? r.saving_date.toISOString().split('T')[0] : String(r.saving_date),\n        note: r.note,\n        created_at: r.created_at\n    }));\n} catch (err) {\n    node.error('List savings error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 550,
+    "y": 70,
+    "wires": [["savings_resp"]]
+  },
+  {
+    "id": "savings_post_in",
+    "type": "http in",
+    "z": "tab_savings",
+    "name": "POST /api/goals/:id/savings",
+    "url": "/api/goals/:id/savings",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 180,
+    "wires": [["savings_post_subflow"]]
+  },
+  {
+    "id": "savings_post_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_savings",
+    "name": "Verify JWT",
+    "x": 350,
+    "y": 180,
+    "wires": [
+      ["savings_post_fn"],
+      ["savings_resp"]
+    ]
+  },
+  {
+    "id": "savings_post_fn",
+    "type": "function",
+    "z": "tab_savings",
+    "name": "Add Saving Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst validate = global.get('validate');\nconst dates = global.get('dates');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\nconst goalId = Number(msg.req.params.id);\n\nif (!Number.isInteger(goalId) || goalId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n    return msg;\n}\n\ntry {\n    // Check goal ownership\n    const [goals] = await pool.execute('SELECT * FROM savings_goals WHERE id = ? AND user_id = ? LIMIT 1', [goalId, msg.userId]);\n    if (goals.length === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n        return msg;\n    }\n    const goal = goals[0];\n    const startDateStr = goal.start_date instanceof Date ? goal.start_date.toISOString().split('T')[0] : String(goal.start_date);\n\n    const val = validate.validateSavingPayload(msg.payload, startDateStr, today);\n    if (!val.valid) {\n        msg.statusCode = 400;\n        msg.payload = { error: val.error };\n        return msg;\n    }\n    const data = val.sanitized;\n\n    // Insert transaction and recompute status within transaction\n    const conn = await pool.getConnection();\n    try {\n        await conn.beginTransaction();\n        const [insertRes] = await conn.execute(`\n            INSERT INTO savings_transactions (goal_id, amount, saving_date, note)\n            VALUES (?, ?, ?, ?)\n        `, [goalId, data.amount, data.saving_date, data.note]);\n\n        const [txSumRow] = await conn.execute(`\n            SELECT COALESCE(SUM(amount), 0) AS total\n            FROM savings_transactions WHERE goal_id = ?\n        `, [goalId]);\n        const newTxSum = Number(txSumRow[0].total);\n        const newCurrent = Number(goal.initial_amount) + newTxSum;\n        const isNowCompleted = newCurrent >= Number(goal.target_amount);\n        const newLifecycle = isNowCompleted ? 'completed' : 'active';\n\n        if (goal.status !== newLifecycle) {\n            await conn.execute('UPDATE savings_goals SET status = ? WHERE id = ?', [newLifecycle, goalId]);\n            if (isNowCompleted) {\n                // Create in-app completion notification\n                await conn.execute(`\n                    INSERT IGNORE INTO notifications (user_id, goal_id, type, channel, title, message, notification_date)\n                    VALUES (?, ?, 'goal_completed', 'app', 'ยินดีด้วย! บรรลุเป้าหมายแล้ว', 'คุณได้ออมเงินครบตามเป้าหมายเรียบร้อยแล้ว เยี่ยมมากเลย 🎉', ?)\n                `, [msg.userId, goalId, today]);\n            }\n        }\n\n        await conn.commit();\n\n        const updatedGoalObj = { ...goal, status: newLifecycle };\n        const metrics = calc.computeGoalMetrics(updatedGoalObj, newTxSum, today);\n\n        msg.statusCode = 201;\n        msg.payload = {\n            id: insertRes.insertId,\n            goal_id: goalId,\n            amount: data.amount,\n            saving_date: data.saving_date,\n            note: data.note,\n            metrics: metrics\n        };\n    } catch (txErr) {\n        await conn.rollback();\n        throw txErr;\n    } finally {\n        conn.release();\n    }\n} catch (err) {\n    node.error('Add saving error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 550,
+    "y": 170,
+    "wires": [["savings_resp"]]
+  },
+  {
+    "id": "savings_del_in",
+    "type": "http in",
+    "z": "tab_savings",
+    "name": "DELETE /api/savings/:id",
+    "url": "/api/savings/:id",
+    "method": "delete",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 280,
+    "wires": [["savings_del_subflow"]]
+  },
+  {
+    "id": "savings_del_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_savings",
+    "name": "Verify JWT",
+    "x": 350,
+    "y": 280,
+    "wires": [
+      ["savings_del_fn"],
+      ["savings_resp"]
+    ]
+  },
+  {
+    "id": "savings_del_fn",
+    "type": "function",
+    "z": "tab_savings",
+    "name": "Delete Saving Handler",
+    "func": "const db = global.get('db');\nconst pool = db.getPool();\nconst txId = Number(msg.req.params.id);\n\nif (!Number.isInteger(txId) || txId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบรายการที่ระบุ' };\n    return msg;\n}\n\ntry {\n    // Verify ownership via JOIN\n    const [rows] = await pool.execute(`\n        SELECT t.id, t.goal_id, g.target_amount, g.initial_amount, g.status\n        FROM savings_transactions t\n        JOIN savings_goals g ON t.goal_id = g.id\n        WHERE t.id = ? AND g.user_id = ?\n        LIMIT 1\n    `, [txId, msg.userId]);\n\n    if (rows.length === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบรายการที่ระบุ' };\n        return msg;\n    }\n\n    const row = rows[0];\n    const goalId = row.goal_id;\n\n    const conn = await pool.getConnection();\n    try {\n        await conn.beginTransaction();\n        await conn.execute('DELETE FROM savings_transactions WHERE id = ?', [txId]);\n\n        // Recompute status\n        const [sumRows] = await conn.execute('SELECT COALESCE(SUM(amount), 0) AS total FROM savings_transactions WHERE goal_id = ?', [goalId]);\n        const newTotal = Number(row.initial_amount) + Number(sumRows[0].total);\n        const newLifecycle = newTotal >= Number(row.target_amount) ? 'completed' : 'active';\n\n        if (row.status !== newLifecycle) {\n            await conn.execute('UPDATE savings_goals SET status = ? WHERE id = ?', [newLifecycle, goalId]);\n        }\n\n        await conn.commit();\n        msg.statusCode = 204;\n        msg.payload = '';\n    } catch (txErr) {\n        await conn.rollback();\n        throw txErr;\n    } finally {\n        conn.release();\n    }\n} catch (err) {\n    node.error('Delete saving error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 550,
+    "y": 270,
+    "wires": [["savings_resp"]]
+  },
+  {
+    "id": "savings_resp",
+    "type": "http response",
+    "z": "tab_savings",
+    "name": "Savings Response",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 770,
+    "y": 180,
+    "wires": []
+  },
+  {
+    "id": "dash_get_in",
+    "type": "http in",
+    "z": "tab_dashboard",
+    "name": "GET /api/dashboard",
+    "url": "/api/dashboard",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 80,
+    "wires": [["dash_get_subflow"]]
+  },
+  {
+    "id": "dash_get_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_dashboard",
+    "name": "Verify JWT",
+    "x": 330,
+    "y": 80,
+    "wires": [
+      ["dash_get_fn"],
+      ["dash_resp"]
+    ]
+  },
+  {
+    "id": "dash_get_fn",
+    "type": "function",
+    "z": "tab_dashboard",
+    "name": "Dashboard Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst dates = global.get('dates');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\n\ntry {\n    // 1. Fetch all goals with transaction sums\n    const [goalsRows] = await pool.execute(`\n        SELECT g.*, COALESCE(SUM(t.amount), 0) AS tx_sum\n        FROM savings_goals g\n        LEFT JOIN savings_transactions t ON g.id = t.goal_id\n        WHERE g.user_id = ?\n        GROUP BY g.id\n        ORDER BY g.created_at DESC\n    `, [msg.userId]);\n\n    let totalSaved = 0;\n    let todaySavingTotal = 0;\n    let activeGoalsCount = 0;\n    let completedGoalsCount = 0;\n    const goalsWithMetrics = [];\n    const upcomingDeadlines = [];\n\n    for (const g of goalsRows) {\n        const metrics = calc.computeGoalMetrics(g, g.tx_sum, today);\n        totalSaved += metrics.current;\n\n        if (g.status === 'completed' || metrics.status === 'completed') {\n            completedGoalsCount++;\n        } else {\n            activeGoalsCount++;\n            if (!metrics.overdue) {\n                todaySavingTotal += metrics.daily;\n            }\n            if (metrics.days_left > 0 && metrics.days_left <= 30) {\n                upcomingDeadlines.push({\n                    id: g.id,\n                    name: g.name,\n                    days_left: metrics.days_left,\n                    target_date: g.target_date instanceof Date ? g.target_date.toISOString().split('T')[0] : String(g.target_date),\n                    remaining: metrics.remaining,\n                    status: metrics.status\n                });\n            }\n        }\n\n        goalsWithMetrics.push({\n            id: g.id,\n            name: g.name,\n            target_amount: Number(g.target_amount),\n            initial_amount: Number(g.initial_amount),\n            start_date: g.start_date instanceof Date ? g.start_date.toISOString().split('T')[0] : String(g.start_date),\n            target_date: g.target_date instanceof Date ? g.target_date.toISOString().split('T')[0] : String(g.target_date),\n            status: g.status,\n            metrics: metrics\n        });\n    }\n\n    upcomingDeadlines.sort((a, b) => a.days_left - b.days_left);\n\n    // 2. Fetch unread notifications count\n    const [notifRows] = await pool.execute(`\n        SELECT COUNT(*) AS unread_count\n        FROM notifications\n        WHERE user_id = ? AND is_read = 0\n    `, [msg.userId]);\n    const unreadCount = Number(notifRows[0].unread_count) || 0;\n\n    // 3. Fetch latest AI analysis if available\n    const [aiRows] = await pool.execute(`\n        SELECT a.*, g.name as goal_name\n        FROM ai_analyses a\n        JOIN savings_goals g ON a.goal_id = g.id\n        WHERE g.user_id = ?\n        ORDER BY a.created_at DESC\n        LIMIT 1\n    `, [msg.userId]);\n    const latestAi = aiRows.length > 0 ? aiRows[0] : null;\n\n    msg.statusCode = 200;\n    msg.payload = {\n        summary: {\n            total_goals: goalsRows.length,\n            active_goals: activeGoalsCount,\n            completed_goals: completedGoalsCount,\n            total_saved: calc.round2(totalSaved)\n        },\n        today_saving_total: calc.round2(todaySavingTotal),\n        goals: goalsWithMetrics,\n        upcoming_deadlines: upcomingDeadlines,\n        latest_ai: latestAi,\n        unread_notifications: unreadCount\n    };\n} catch (err) {\n    node.error('Dashboard error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 530,
+    "y": 70,
+    "wires": [["dash_resp"]]
+  },
+  {
+    "id": "analysis_get_in",
+    "type": "http in",
+    "z": "tab_dashboard",
+    "name": "GET /api/goals/:id/analysis",
+    "url": "/api/goals/:id/analysis",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 180,
+    "wires": [["analysis_get_subflow"]]
+  },
+  {
+    "id": "analysis_get_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_dashboard",
+    "name": "Verify JWT",
+    "x": 350,
+    "y": 180,
+    "wires": [
+      ["analysis_get_fn"],
+      ["dash_resp"]
+    ]
+  },
+  {
+    "id": "analysis_get_fn",
+    "type": "function",
+    "z": "tab_dashboard",
+    "name": "Goal Analysis Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst dates = global.get('dates');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\nconst goalId = Number(msg.req.params.id);\n\nif (!Number.isInteger(goalId) || goalId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n    return msg;\n}\n\ntry {\n    // Check goal ownership\n    const [goals] = await pool.execute('SELECT * FROM savings_goals WHERE id = ? AND user_id = ? LIMIT 1', [goalId, msg.userId]);\n    if (goals.length === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n        return msg;\n    }\n    const goal = goals[0];\n    const goalNormalized = {\n        ...goal,\n        start_date: goal.start_date instanceof Date ? goal.start_date.toISOString().split('T')[0] : String(goal.start_date),\n        target_date: goal.target_date instanceof Date ? goal.target_date.toISOString().split('T')[0] : String(goal.target_date)\n    };\n\n    // Fetch transactions\n    const [transactions] = await pool.execute(`\n        SELECT amount, saving_date\n        FROM savings_transactions\n        WHERE goal_id = ?\n        ORDER BY saving_date ASC\n    `, [goalId]);\n    const txNormalized = transactions.map(t => ({\n        amount: Number(t.amount),\n        saving_date: t.saving_date instanceof Date ? t.saving_date.toISOString().split('T')[0] : String(t.saving_date)\n    }));\n    const txSum = txNormalized.reduce((sum, t) => sum + t.amount, 0);\n\n    const metrics = calc.computeGoalMetrics(goalNormalized, txSum, today);\n    const chartSeries = calc.buildChartSeries(goalNormalized, txNormalized, today);\n\n    // Latest AI analysis for this goal\n    const [aiRows] = await pool.execute(`\n        SELECT * FROM ai_analyses WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1\n    `, [goalId]);\n    const latestAi = aiRows.length > 0 ? aiRows[0] : null;\n\n    msg.statusCode = 200;\n    msg.payload = {\n        goal: goalNormalized,\n        metrics: metrics,\n        chart: chartSeries,\n        latest_ai: latestAi\n    };\n} catch (err) {\n    node.error('Analysis error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 550,
+    "y": 170,
+    "wires": [["dash_resp"]]
+  },
+  {
+    "id": "dash_resp",
+    "type": "http response",
+    "z": "tab_dashboard",
+    "name": "Dashboard Response",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 760,
+    "y": 130,
     "wires": []
   }
 ]

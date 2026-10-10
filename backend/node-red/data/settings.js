@@ -552,7 +552,10 @@ module.exports = {
         jwt: require('/usr/src/node-red/node_modules/jsonwebtoken'),
         bcrypt: require('/usr/src/node-red/node_modules/bcryptjs'),
         db: require('/data/lib/db.js'),
-        auth: require('/data/lib/auth.js')
+        auth: require('/data/lib/auth.js'),
+        calc: require('/data/lib/calc.js'),
+        validate: require('/data/lib/validate.js'),
+        dates: require('/data/lib/dates.js')
     },
 
     /** The maximum number of messages nodes will buffer internally as part of their
