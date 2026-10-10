@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Smart Savings</string>
+    <string name="title_activity_main">Smart Savings</string>
+    <string name="package_name">com.smartsavings.companion</string>
+    <string name="custom_url_scheme">com.smartsavings.companion</string>
+</resources>
