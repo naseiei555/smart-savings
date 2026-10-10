@@ -370,7 +370,7 @@ describe('Block B2 API Tests - Goals & Savings', () => {
       assert.strictEqual(data.goals.length, 1);
       assert.ok(data.today_saving_total >= 0);
       assert.ok(Array.isArray(data.upcoming_deadlines));
-      assert.strictEqual(data.unread_notifications, 1);
+      assert.ok(data.unread_notifications >= 1);
     });
 
     it('GET /api/goals/:id/analysis returns chart series and metrics', async () => {

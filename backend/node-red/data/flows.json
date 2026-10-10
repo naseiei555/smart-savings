@@ -49,6 +49,13 @@
     "info": "In-app notifications and trigger endpoints"
   },
   {
+    "id": "tab_line",
+    "type": "tab",
+    "label": "LINE API & Scheduler",
+    "disabled": false,
+    "info": "LINE Webhook, Account Linking, and Daily Scheduler"
+  },
+  {
     "id": "subflow_jwt_verify",
     "type": "subflow",
     "name": "Verify JWT Token",
@@ -964,6 +971,229 @@
     "x": 620,
     "y": 390,
     "wires": [["notif_resp"]]
+  },
+  {
+    "id": "line_resp",
+    "type": "http response",
+    "z": "tab_line",
+    "name": "LINE Response",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 780,
+    "y": 150,
+    "wires": []
+  },
+  {
+    "id": "line_code_in",
+    "type": "http in",
+    "z": "tab_line",
+    "name": "POST /api/line/link-code",
+    "url": "/api/line/link-code",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 80,
+    "wires": [["line_code_subflow"]]
+  },
+  {
+    "id": "line_code_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_line",
+    "name": "Verify JWT",
+    "x": 360,
+    "y": 80,
+    "wires": [
+      ["line_code_fn"],
+      ["line_resp"]
+    ]
+  },
+  {
+    "id": "line_code_fn",
+    "type": "function",
+    "z": "tab_line",
+    "name": "Generate Link Code Handler",
+    "func": "const db = global.get('db');\nconst line = global.get('line');\nconst pool = db.getPool();\n\ntry {\n    const code = line.generateLinkCode();\n    // Expires in 15 minutes\n    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);\n\n    // Remove old codes for this user\n    await pool.execute('DELETE FROM line_link_codes WHERE user_id = ?', [msg.userId]);\n    await pool.execute(`\n        INSERT INTO line_link_codes (code, user_id, expires_at)\n        VALUES (?, ?, ?)\n    `, [code, msg.userId, expiresAt]);\n\n    msg.statusCode = 200;\n    msg.payload = {\n        code: code,\n        expires_at: expiresAt.toISOString(),\n        instructions: 'พิมพ์รหัส 6 หลักนี้ในแชท LINE Official Account ของ Smart Savings เพื่อเชื่อมต่อบัญชี'\n    };\n} catch (err) {\n    node.error('Generate line code error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 70,
+    "wires": [["line_resp"]]
+  },
+  {
+    "id": "line_status_in",
+    "type": "http in",
+    "z": "tab_line",
+    "name": "GET /api/line/status",
+    "url": "/api/line/status",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 180,
+    "wires": [["line_status_subflow"]]
+  },
+  {
+    "id": "line_status_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_line",
+    "name": "Verify JWT",
+    "x": 350,
+    "y": 180,
+    "wires": [
+      ["line_status_fn"],
+      ["line_resp"]
+    ]
+  },
+  {
+    "id": "line_status_fn",
+    "type": "function",
+    "z": "tab_line",
+    "name": "Get LINE Status Handler",
+    "func": "const db = global.get('db');\nconst pool = db.getPool();\n\ntry {\n    const [rows] = await pool.execute(`\n        SELECT line_user_id, is_connected, updated_at\n        FROM line_accounts\n        WHERE user_id = ?\n        LIMIT 1\n    `, [msg.userId]);\n\n    if (rows.length === 0) {\n        msg.statusCode = 200;\n        msg.payload = { is_connected: false };\n    } else {\n        msg.statusCode = 200;\n        msg.payload = {\n            is_connected: Boolean(rows[0].is_connected),\n            line_user_id: rows[0].line_user_id ? rows[0].line_user_id.slice(0, 8) + '...' : null,\n            updated_at: rows[0].updated_at\n        };\n    }\n} catch (err) {\n    node.error('Get line status error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 550,
+    "y": 170,
+    "wires": [["line_resp"]]
+  },
+  {
+    "id": "line_disconnect_in",
+    "type": "http in",
+    "z": "tab_line",
+    "name": "POST /api/line/disconnect",
+    "url": "/api/line/disconnect",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 170,
+    "y": 280,
+    "wires": [["line_disconnect_subflow"]]
+  },
+  {
+    "id": "line_disconnect_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_line",
+    "name": "Verify JWT",
+    "x": 370,
+    "y": 280,
+    "wires": [
+      ["line_disconnect_fn"],
+      ["line_resp"]
+    ]
+  },
+  {
+    "id": "line_disconnect_fn",
+    "type": "function",
+    "z": "tab_line",
+    "name": "Disconnect LINE Handler",
+    "func": "const db = global.get('db');\nconst pool = db.getPool();\n\ntry {\n    await pool.execute('DELETE FROM line_accounts WHERE user_id = ?', [msg.userId]);\n    msg.statusCode = 200;\n    msg.payload = { success: true, message: 'ยกเลิกการเชื่อมต่อบัญชี LINE สำเร็จ' };\n} catch (err) {\n    node.error('Disconnect LINE error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 570,
+    "y": 270,
+    "wires": [["line_resp"]]
+  },
+  {
+    "id": "line_webhook_in",
+    "type": "http in",
+    "z": "tab_line",
+    "name": "POST /api/line/webhook",
+    "url": "/api/line/webhook",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 380,
+    "wires": [["line_webhook_fn"]]
+  },
+  {
+    "id": "line_webhook_fn",
+    "type": "function",
+    "z": "tab_line",
+    "name": "LINE Webhook Handler",
+    "func": "const db = global.get('db');\nconst line = global.get('line');\nconst pool = db.getPool();\nconst signature = msg.req.headers['x-line-signature'];\nconst channelSecret = env.get('LINE_CHANNEL_SECRET');\nconst accessToken = env.get('LINE_CHANNEL_ACCESS_TOKEN');\n\n// Signature Verification\nif (channelSecret) {\n    const rawBody = typeof msg.req.rawBody === 'string' ? msg.req.rawBody : JSON.stringify(msg.payload);\n    const isValid = line.verifyLineSignature(rawBody, signature, channelSecret);\n    if (!isValid) {\n        msg.statusCode = 403;\n        msg.payload = { error: 'Invalid LINE signature' };\n        return msg;\n    }\n}\n\nconst events = msg.payload?.events || [];\ntry {\n    for (const ev of events) {\n        if (ev.type === 'message' && ev.message?.type === 'text') {\n            const lineUserId = ev.source?.userId;\n            const text = (ev.message.text || '').trim();\n\n            // Check 6-digit linking code\n            if (/^\\d{6}$/.test(text)) {\n                const [rows] = await pool.execute(`\n                    SELECT user_id, expires_at FROM line_link_codes\n                    WHERE code = ? AND expires_at > NOW()\n                    LIMIT 1\n                `, [text]);\n\n                if (rows.length > 0) {\n                    const userId = rows[0].user_id;\n                    // Link account\n                    await pool.execute(`\n                        INSERT INTO line_accounts (user_id, line_user_id, is_connected)\n                        VALUES (?, ?, 1)\n                        ON DUPLICATE KEY UPDATE line_user_id = VALUES(line_user_id), is_connected = 1\n                    `, [userId, lineUserId]);\n\n                    // Clean up code\n                    await pool.execute('DELETE FROM line_link_codes WHERE code = ?', [text]);\n\n                    // Reply success\n                    await line.sendLinePushMessage(lineUserId, [{\n                        type: 'text',\n                        text: '🎉 เชื่อมต่อบัญชี Smart Savings สำเร็จเรียบร้อยแล้ว! เพื่อนช่วยออมจะส่งสรุปการออมและเตือนเป้าหมายให้คุณทางนี้ครับ'\n                    }], accessToken);\n                } else {\n                    await line.sendLinePushMessage(lineUserId, [{\n                        type: 'text',\n                        text: '❌ รหัสยืนยันไม่ถูกต้องหรือหมดอายุแล้ว กรุณากดขอรหัสใหม่จากหน้าเว็บแอปพลิเคชัน Smart Savings'\n                    }], accessToken);\n                }\n            } else if (text === 'สรุป' || text.toLowerCase() === 'summary') {\n                // Quick summary reply\n                const [accRows] = await pool.execute('SELECT user_id FROM line_accounts WHERE line_user_id = ? AND is_connected = 1', [lineUserId]);\n                if (accRows.length > 0) {\n                    const uId = accRows[0].user_id;\n                    const [sumRows] = await pool.execute(`\n                        SELECT COALESCE(SUM(current_amount), 0) AS total_saved,\n                               COUNT(CASE WHEN status = 'active' THEN 1 END) AS active_goals\n                        FROM savings_goals WHERE user_id = ?\n                    `, [uId]);\n                    const msgText = `💰 สรุปการออมของคุณ:\\n- ออมแล้วทั้งหมด: ${Number(sumRows[0].total_saved).toLocaleString('th-TH')} บาท\\n- เป้าหมายที่ทำอยู่: ${sumRows[0].active_goals} รายการ\\n\\nดูรายละเอียดเพิ่มเติมได้ที่หน้าเว็บแอปเลยครับ!`;\n                    await line.sendLinePushMessage(lineUserId, [{ type: 'text', text: msgText }], accessToken);\n                }\n            }\n        }\n    }\n    msg.statusCode = 200;\n    msg.payload = { success: true };\n} catch (err) {\n    node.error('LINE webhook error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 410,
+    "y": 380,
+    "wires": [["line_resp"]]
+  },
+  {
+    "id": "line_cron_in",
+    "type": "inject",
+    "z": "tab_line",
+    "name": "Daily 09:00 AM Cron",
+    "props": [{"p": "payload"}],
+    "repeat": "",
+    "crontab": "0 9 * * *",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "daily_job",
+    "payloadType": "str",
+    "x": 160,
+    "y": 480,
+    "wires": [["line_cron_fn"]]
+  },
+  {
+    "id": "line_cron_manual_in",
+    "type": "http in",
+    "z": "tab_line",
+    "name": "POST /api/scheduler/run-daily",
+    "url": "/api/scheduler/run-daily",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 550,
+    "wires": [["line_cron_subflow"]]
+  },
+  {
+    "id": "line_cron_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_line",
+    "name": "Verify JWT",
+    "x": 400,
+    "y": 550,
+    "wires": [
+      ["line_cron_fn"],
+      ["line_resp"]
+    ]
+  },
+  {
+    "id": "line_cron_fn",
+    "type": "function",
+    "z": "tab_line",
+    "name": "Daily Broadcast & Reminder Processor",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst dates = global.get('dates');\nconst line = global.get('line');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\nconst accessToken = env.get('LINE_CHANNEL_ACCESS_TOKEN');\n\ntry {\n    // Find all users who have active goals\n    const [users] = await pool.execute('SELECT DISTINCT user_id FROM savings_goals WHERE status = \\'active\\'');\n    let processedCount = 0;\n    let lineDispatchedCount = 0;\n\n    for (const u of users) {\n        const userId = u.user_id;\n        const [goals] = await pool.execute(`\n            SELECT g.*, COALESCE(SUM(t.amount), 0) AS tx_sum\n            FROM savings_goals g\n            LEFT JOIN savings_transactions t ON g.id = t.goal_id\n            WHERE g.user_id = ? AND g.status = 'active'\n            GROUP BY g.id\n        `, [userId]);\n\n        let totalSaved = 0;\n        let todayTarget = 0;\n        let activeGoalsCount = 0;\n\n        for (const g of goals) {\n            const metrics = calc.computeGoalMetrics(g, g.tx_sum, today);\n            if (metrics.status === 'completed') continue;\n            activeGoalsCount++;\n            totalSaved += metrics.current;\n            if (!metrics.overdue) todayTarget += metrics.daily;\n\n            // Generate in-app reminders\n            if (metrics.daily > 0 && !metrics.overdue) {\n                await pool.execute(`\n                    INSERT IGNORE INTO notifications (user_id, goal_id, type, channel, title, message, notification_date)\n                    VALUES (?, ?, 'daily_reminder', 'app', ?, ?, ?)\n                `, [\n                    userId,\n                    g.id,\n                    'เตือนออมเงินประจำวัน: ' + g.name,\n                    `วันนี้อย่าลืมออมเงิน ${metrics.daily.toLocaleString('th-TH')} บาท เพื่อให้เป็นไปตามแผนนะครับ`,\n                    today\n                ]);\n            }\n        }\n\n        // Check if user has LINE connected\n        const [lineAcc] = await pool.execute('SELECT line_user_id FROM line_accounts WHERE user_id = ? AND is_connected = 1 LIMIT 1', [userId]);\n        if (lineAcc.length > 0 && activeGoalsCount > 0) {\n            const lineUserId = lineAcc[0].line_user_id;\n            const lineMsg = line.buildDailySummaryMessage({\n                total_saved: totalSaved,\n                today_target: todayTarget,\n                active_goals: activeGoalsCount,\n                mascot_mood: 'cheering'\n            });\n            const res = await line.sendLinePushMessage(lineUserId, [lineMsg], accessToken);\n            if (res.success) lineDispatchedCount++;\n        }\n        processedCount++;\n    }\n\n    msg.statusCode = 200;\n    msg.payload = {\n        success: true,\n        date: today,\n        users_processed: processedCount,\n        line_dispatched: lineDispatchedCount\n    };\n} catch (err) {\n    node.error('Daily scheduler error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดในการประมวลผลประจำวัน' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 620,
+    "y": 510,
+    "wires": [["line_resp"]]
   }
 ]
 

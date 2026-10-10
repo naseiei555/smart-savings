@@ -81,4 +81,16 @@ export class GoalService {
   triggerReminders(): Observable<{ success: boolean; generated_count: number; date: string }> {
     return this.http.post<{ success: boolean; generated_count: number; date: string }>(`${this.apiUrl}/notifications/trigger-reminders`, {});
   }
+
+  getLineStatus(): Observable<{ is_connected: boolean; line_user_id?: string; updated_at?: string }> {
+    return this.http.get<{ is_connected: boolean; line_user_id?: string; updated_at?: string }>(`${this.apiUrl}/line/status`);
+  }
+
+  getLineLinkCode(): Observable<{ code: string; expires_at: string; instructions: string }> {
+    return this.http.post<{ code: string; expires_at: string; instructions: string }>(`${this.apiUrl}/line/link-code`, {});
+  }
+
+  disconnectLine(): Observable<{ success: boolean; message: string }> {
+    return this.http.post<{ success: boolean; message: string }>(`${this.apiUrl}/line/disconnect`, {});
+  }
 }

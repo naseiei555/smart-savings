@@ -556,7 +556,8 @@ module.exports = {
         calc: require('/data/lib/calc.js'),
         validate: require('/data/lib/validate.js'),
         dates: require('/data/lib/dates.js'),
-        ai: require('/data/lib/ai.js')
+        ai: require('/data/lib/ai.js'),
+        line: require('/data/lib/line.js')
     },
 
     /** The maximum number of messages nodes will buffer internally as part of their

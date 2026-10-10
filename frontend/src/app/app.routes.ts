@@ -8,6 +8,7 @@ import { GoalsListComponent } from './features/goals/goals-list.component';
 import { GoalFormComponent } from './features/goals/goal-form.component';
 import { GoalDetailComponent } from './features/goals/goal-detail.component';
 import { NotificationsListComponent } from './features/notifications/notifications-list.component';
+import { LineConnectComponent } from './features/line/line-connect.component';
 
 export const routes: Routes = [
   { path: '', component: LandingComponent },
@@ -19,5 +20,6 @@ export const routes: Routes = [
   { path: 'goals/:id', component: GoalDetailComponent, canActivate: [authGuard] },
   { path: 'goals/:id/edit', component: GoalFormComponent, canActivate: [authGuard] },
   { path: 'notifications', component: NotificationsListComponent, canActivate: [authGuard] },
+  { path: 'line', component: LineConnectComponent, canActivate: [authGuard] },
   { path: '**', redirectTo: '' }
 ];
