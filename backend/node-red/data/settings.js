@@ -550,7 +550,9 @@ module.exports = {
     functionGlobalContext: {
         mysql: require('/usr/src/node-red/node_modules/mysql2/promise'),
         jwt: require('/usr/src/node-red/node_modules/jsonwebtoken'),
-        bcrypt: require('/usr/src/node-red/node_modules/bcryptjs')
+        bcrypt: require('/usr/src/node-red/node_modules/bcryptjs'),
+        db: require('/data/lib/db.js'),
+        auth: require('/data/lib/auth.js')
     },
 
     /** The maximum number of messages nodes will buffer internally as part of their

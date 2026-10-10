@@ -1,10 +1,32 @@
+# Dependencies
 node_modules/
+*/node_modules/
+
+# Environment and Secrets
 .env
+*.env
+*.keystore
+*.jks
+release/*.apk
+release/*.aab
+
+# Node-RED data directory: track only flows, settings, and lib modules
 backend/node-red/data/*
 !backend/node-red/data/.gitkeep
 !backend/node-red/data/flows.json
 !backend/node-red/data/settings.js
+!backend/node-red/data/lib/
+!backend/node-red/data/lib/**
+backend/node-red/data/flows_cred.json
+backend/node-red/data/.config*
+backend/node-red/data/.runtime.json
+backend/node-red/data/.sessions.json
+
+# Build outputs & scratch files
 dist/
 .angular/
-android/
+android/app/build/
+android/.gradle/
+local.properties
 *.log
+scratch/
