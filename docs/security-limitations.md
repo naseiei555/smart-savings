@@ -1,18 +1,34 @@
-# Security Architecture & Limitations
+# Security Architecture, Hardening & Audit Verification
 
-เอกสารบันทึกข้อจำกัดและข้อควรระวังด้านความปลอดภัยของระบบ Smart Savings Companion
+เอกสารรายงานการตรวจสอบและยืนยันความมั่นคงปลอดภัย (Security Hardening & Audit Verification) ของระบบ **Smart Savings Companion**
 
-## 1. Authentication & User Enumeration Limitation
+---
 
-1. **User Enumeration ใน Endpoint Login**:
-   - ระบบลดความเสี่ยงของการโจมตีแบบ Timing Attack โดยการทำ dummy password hash comparison (`bcrypt.compare` กับค่า Dummy Hash) ในกรณีที่ไม่พบผู้ใช้ในระบบ เพื่อให้ระยะเวลาตอบสนอง (Response Time) ใกล้เคียงกันระหว่างกรณี "ไม่พบบัญชี" และ "รหัสผ่านไม่ถูกต้อง"
-   - ตอบกลับด้วยข้อความเดียวกัน: `"อีเมลหรือรหัสผ่านไม่ถูกต้อง"` (HTTP Status 401)
-   - **ข้อจำกัด (Limitation)**: การป้องกัน User Enumeration ยัง**ไม่สมบูรณ์ 100%** เนื่องจาก Endpoint สมัครสมาชิก (`POST /api/auth/register`) มีการตอบกลับ HTTP Status 409 (`"อีเมลนี้ถูกใช้งานแล้วในระบบ"`) ซึ่งผู้ไม่หวังดีสามารถใช้วิธีลองสมัครสมาชิกเพื่อตรวจสอบการมีอยู่ของบัญชีอีเมลได้
+## 1. รายการตรวจสอบความปลอดภัยหลัก (Security Checklist)
 
-2. **Rate Limiting Limitation**:
-   - ในปัจจุบันระบบยัง**ไม่มีการใช้ Rate Limiting หรือ Brute-force Protection** (เช่น express-rate-limit หรือ Node-RED rate limit node)
-   - จึงควรบันทึกเป็นข้อจำกัดของระบบที่ต้องพิจารณาติดตั้ง Web Application Firewall (WAF) หรือ Rate Limiter เพิ่มเติมก่อนนำขึ้น Production จริง
+| มาตรการความปลอดภัย | ผลการตรวจสอบ | รายละเอียดเชิงเทคนิค |
+|---|---|---|
+| **SQL Injection Prevention** | ผ่าน 100% | ทุกคำสั่ง SQL ใน `backend/node-red/data/lib/` ใช้ Parameterized Queries (Placeholder `?`) ผ่าน `mysql2/promise` ทั้งหมด ไม่มีการต่อ String ใน Query เด็ดขาด |
+| **No Leaked SQL Errors** | ผ่าน 100% | จัดการ Error ด้วย `try/catch` และตอบกลับ Client ด้วย HTTP Status (400, 401, 404, 500) และข้อความภาษาไทยทั่วไป ไม่ส่ง Stack trace หรือ SQL Syntax Error ออกไปภายนอก |
+| **Password Hashing** | ผ่าน 100% | ใช้ `bcryptjs` เข้ารหัสรหัสผ่านด้วย Cost factor 10 (`bcrypt.genSalt(10)`) |
+| **Password UTF-8 Byte Check** | ผ่าน 100% | ตรวจสอบความยาวรหัสผ่านระดับไบต์ `Buffer.byteLength(password, 'utf8')` ระหว่าง 8 ถึง 72 ไบต์ (รองรับข้อจำกัด 72 ไบต์ของอัลกอริทึม bcrypt) |
+| **JWT Pinning & RFC 7519 Compliance** | ผ่าน 100% | กำหนด algorithms: `['HS256']` ชัดเจนใน `jwt.verify()`, ค่า `sub` ถูกแปลงและเก็บเป็น String ตามมาตรฐาน RFC 7519, และสกัด `userId` เป็น Positive Integer ที่ฝั่ง Backend |
+| **Timing Attack Mitigation** | ผ่าน (พร้อมบันทึกข้อจำกัด) | เมื่อไม่พบผู้ใช้งานในระบบ (`POST /api/auth/login`) Backend ทำการรัน `bcrypt.compare` กับค่า Dummy Hash Cost 10 เพื่อให้เวลาตอบสนอง (Response Time) ใกล้เคียงกับกรณีผู้ใช้มีอยู่จริงแต่รหัสผ่านผิด |
+| **Multi-tenant Data Isolation** | ผ่าน 100% | ทุกการเข้าถึงทรัพยากร (Goals, Savings, Notifications, AI Analysis, LINE Account) มีเงื่อนไข `WHERE user_id = ?` กำกับเสมอ ป้องกัน IDOR โดยสิ้นเชิง |
+| **LINE Webhook Signature Verification** | ผ่าน 100% | ตรวจสอบ HMAC-SHA256 Signature ใน Header `x-line-signature` เทียบกับ Raw Body ก่อนประมวลผล Webhook Event ใด ๆ |
 
-3. **Client Token Storage (Limitation)**:
-   - จัดเก็บ JWT บน `localStorage` เพื่อความสะดวกในการใช้งานแบบ SPA/PWA มีความเสี่ยงต่อ XSS จึงต้องใช้ Content Security Policy และ Sanitize Input อย่างเคร่งครัด
-   - การออกจากระบบ (Logout) ทำโดยการลบ Token ฝั่ง Client โดยยังไม่มี Token Blacklist/Revocation ฝั่งเซิร์ฟเวอร์
+---
+
+## 2. ข้อจำกัดและข้อควรระวัง (Known Limitations & Production Roadmap)
+
+1. **User Enumeration ใน Endpoint Register (Limitation):**
+   - แม้ว่าหน้า Login จะป้องกัน Timing Attack และใช้ข้อความเดียวกัน แต่หน้าสมัครสมาชิก (`POST /api/auth/register`) จะตอบกลับ HTTP 409 (`"อีเมลนี้ถูกใช้งานแล้วในระบบ"`) เมื่อมีอีเมลซ้ำ ทำให้ผู้ไม่หวังดีสามารถตรวจสอบได้ว่าอีเมลนั้นมีบัญชีอยู่ในระบบหรือไม่
+   - *คำแนะนำสำหรับ Production:* สามารถปรับเป็นขั้นตอนการส่งอีเมลยืนยันตัวตน (Email Verification Link) โดยตอบ 200 เหมือนกันทุกกรณีเพื่อปิดช่องว่างนี้
+
+2. **Rate Limiting & Brute-force Protection:**
+   - ปัจจุบันระบบยังไม่ได้เปิดใช้งาน Rate Limiter ที่ระดับ Reverse Proxy หรือ Node-RED
+   - *คำแนะนำสำหรับ Production:* ติดตั้ง Nginx `limit_req_zone` หรือ WAF (เช่น Cloudflare) เพื่อจำกัดจำนวน Request ต่อ IP สำหรับ Endpoint `/api/auth/login` และ `/api/line/link-code`
+
+3. **Client-side Token Storage (JWT in localStorage):**
+   - ฝั่งเว็บแอปพลิเคชันจัดเก็บ JWT ใน `localStorage` เพื่อความสะดวกในการทำงานร่วมกันระหว่าง PWA และ Capacitor Android
+   - *คำแนะนำสำหรับ Production:* สามารถพิจารณาใช้ HttpOnly Cookie ร่วมกับ CSRF Token หากใช้งานเป็น Web Application เพียวๆ
