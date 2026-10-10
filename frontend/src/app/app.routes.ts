@@ -7,6 +7,7 @@ import { DashboardComponent } from './features/dashboard/dashboard.component';
 import { GoalsListComponent } from './features/goals/goals-list.component';
 import { GoalFormComponent } from './features/goals/goal-form.component';
 import { GoalDetailComponent } from './features/goals/goal-detail.component';
+import { NotificationsListComponent } from './features/notifications/notifications-list.component';
 
 export const routes: Routes = [
   { path: '', component: LandingComponent },
@@ -17,5 +18,6 @@ export const routes: Routes = [
   { path: 'goals/new', component: GoalFormComponent, canActivate: [authGuard] },
   { path: 'goals/:id', component: GoalDetailComponent, canActivate: [authGuard] },
   { path: 'goals/:id/edit', component: GoalFormComponent, canActivate: [authGuard] },
+  { path: 'notifications', component: NotificationsListComponent, canActivate: [authGuard] },
   { path: '**', redirectTo: '' }
 ];

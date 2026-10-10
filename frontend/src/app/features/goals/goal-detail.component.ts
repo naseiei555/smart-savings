@@ -74,14 +74,51 @@ import { AddSavingModalComponent } from '../../shared/components/add-saving-moda
           </div>
         </div>
 
-        <!-- Mascot Advice Box -->
+        <!-- Mascot Advice & AI Analysis Box -->
         <div class="card shadow-sm border-0 rounded-4 mb-4 bg-gradient-light">
-          <div class="card-body p-4 d-flex flex-column flex-md-row align-items-center gap-4">
-            <app-mascot [mood]="mascotMood" [size]="90"></app-mascot>
-            <div class="flex-grow-1 text-center text-md-start">
-              <h5 class="fw-bold mb-1 text-primary">คำแนะนำจากเพื่อนช่วยออม</h5>
-              <p class="mb-0 text-secondary fs-6">{{ mascotMessage }}</p>
+          <div class="card-body p-4">
+            <div class="d-flex flex-column flex-md-row align-items-center gap-4 mb-3">
+              <app-mascot [mood]="mascotMood" [size]="90"></app-mascot>
+              <div class="flex-grow-1 text-center text-md-start">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+                  <h5 class="fw-bold mb-0 text-primary">คำแนะนำจากเพื่อนช่วยออม</h5>
+                  <button 
+                    class="btn btn-sm btn-outline-primary rounded-pill px-3" 
+                    (click)="runAIAnalysis()"
+                    [disabled]="isAnalyzing"
+                  >
+                    @if (isAnalyzing) {
+                      <span class="spinner-border spinner-border-sm me-1"></span> กำลังวิเคราะห์...
+                    } @else {
+                      <span>🤖 ขอคำวิเคราะห์จาก AI</span>
+                    }
+                  </button>
+                </div>
+                <p class="mb-0 text-secondary fs-6">{{ mascotMessage }}</p>
+              </div>
             </div>
+
+            <!-- AI Detailed Analysis if available -->
+            @if (latestAi) {
+              <div class="bg-white rounded-4 p-3 border shadow-xs mt-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="fw-bold text-dark small d-flex align-items-center gap-1">
+                    <span>✨ ผลการวิเคราะห์อัจฉริยะ</span>
+                    @if (latestAi.is_fallback) {
+                      <span class="badge bg-secondary-subtle text-secondary small">(Rule-based Engine)</span>
+                    } @else {
+                      <span class="badge bg-success-subtle text-success small">(LLM AI)</span>
+                    }
+                  </span>
+                  <span class="badge bg-light text-muted small">ระดับความเสี่ยง: {{ latestAi.risk_level }}</span>
+                </div>
+                <p class="mb-1 small text-dark"><strong>สรุป:</strong> {{ latestAi.summary }}</p>
+                <p class="mb-2 small text-dark"><strong>ข้อเสนอแนะ:</strong> {{ latestAi.recommendation }}</p>
+                <div class="text-muted fst-italic" style="font-size: 0.75rem;">
+                  {{ latestAi.disclaimer || 'ข้อมูลจาก AI เป็นเพียงการวิเคราะห์ข้อมูลการออมเบื้องต้น ไม่ใช่คำแนะนำทางการเงินหรือการลงทุนจากผู้เชี่ยวชาญ' }}
+                </div>
+              </div>
+            }
           </div>
         </div>
 
@@ -216,7 +253,9 @@ export class GoalDetailComponent implements OnInit {
   goalId = 0;
   goal: Goal | null = null;
   savings: SavingTransaction[] = [];
+  latestAi: any = null;
   isLoading = true;
+  isAnalyzing = false;
   errorMessage = '';
 
   isAddSavingOpen = false;
@@ -312,10 +351,25 @@ export class GoalDetailComponent implements OnInit {
             }
           ]
         };
+        this.latestAi = analysis.latest_ai;
         this.isLoading = false;
       },
       error: () => {
         this.isLoading = false;
+      }
+    });
+  }
+
+  runAIAnalysis() {
+    this.isAnalyzing = true;
+    this.goalService.triggerAIAnalysis(this.goalId).subscribe({
+      next: (res) => {
+        this.latestAi = res;
+        this.isAnalyzing = false;
+      },
+      error: (err) => {
+        this.isAnalyzing = false;
+        alert(err.error?.error || 'เกิดข้อผิดพลาดในการวิเคราะห์ AI');
       }
     });
   }

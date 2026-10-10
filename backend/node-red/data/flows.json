@@ -35,6 +35,20 @@
     "info": ""
   },
   {
+    "id": "tab_ai",
+    "type": "tab",
+    "label": "AI Analysis API",
+    "disabled": false,
+    "info": "AI Analysis and trigger endpoints"
+  },
+  {
+    "id": "tab_notifications",
+    "type": "tab",
+    "label": "Notifications API",
+    "disabled": false,
+    "info": "In-app notifications and trigger endpoints"
+  },
+  {
     "id": "subflow_jwt_verify",
     "type": "subflow",
     "name": "Verify JWT Token",
@@ -719,5 +733,237 @@
     "x": 760,
     "y": 130,
     "wires": []
+  },
+  {
+    "id": "ai_resp",
+    "type": "http response",
+    "z": "tab_ai",
+    "name": "AI Response",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 760,
+    "y": 150,
+    "wires": []
+  },
+  {
+    "id": "ai_analyze_in",
+    "type": "http in",
+    "z": "tab_ai",
+    "name": "POST /api/goals/:id/analyze",
+    "url": "/api/goals/:id/analyze",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 160,
+    "y": 150,
+    "wires": [["ai_analyze_subflow"]]
+  },
+  {
+    "id": "ai_analyze_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_ai",
+    "name": "Verify JWT",
+    "x": 360,
+    "y": 150,
+    "wires": [
+      ["ai_analyze_fn"],
+      ["ai_resp"]
+    ]
+  },
+  {
+    "id": "ai_analyze_fn",
+    "type": "function",
+    "z": "tab_ai",
+    "name": "AI Goal Analysis Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst dates = global.get('dates');\nconst ai = global.get('ai');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\nconst goalId = Number(msg.req.params.id);\n\nif (!Number.isInteger(goalId) || goalId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n    return msg;\n}\n\ntry {\n    const [goals] = await pool.execute('SELECT * FROM savings_goals WHERE id = ? AND user_id = ? LIMIT 1', [goalId, msg.userId]);\n    if (goals.length === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบเป้าหมายที่ระบุ' };\n        return msg;\n    }\n    const goal = goals[0];\n\n    const [transactions] = await pool.execute('SELECT amount, saving_date FROM savings_transactions WHERE goal_id = ? ORDER BY saving_date ASC', [goalId]);\n    const txSum = transactions.reduce((sum, t) => sum + Number(t.amount), 0);\n    const metrics = calc.computeGoalMetrics(goal, txSum, today);\n\n    let analysisResult = null;\n    const apiKey = env.get('LLM_API_KEY');\n    const apiUrl = env.get('LLM_API_URL');\n    const llmModel = env.get('LLM_MODEL') || 'gemini-1.5-flash';\n\n    if (apiKey && apiUrl) {\n        try {\n            const promptText = `คุณคือผู้ช่วยวิเคราะห์การออมเงิน กรุณาวิเคราะห์เป้าหมายการออมนี้และตอบกลับเป็น JSON ภาษาไทย:\nชื่อเป้าหมาย: ${goal.name}\nยอดเป้าหมาย: ${goal.target_amount} บาท\nยอดออมปัจจุบัน: ${metrics.current} บาท\nคงเหลือ: ${metrics.remaining} บาท\nวันคงเหลือ: ${metrics.days_left} วัน\nออมเฉลี่ยต่อวัน: ${metrics.daily} บาท\nความคืบหน้า: ${metrics.progress}%\nสถานะคำนวณ: ${metrics.status}\n\nตอบเฉพาะ JSON ในรูปแบบ:\n{\n  \"status\": \"${metrics.status}\",\n  \"risk_level\": \"low|medium|high|none\",\n  \"summary\": \"สรุปสถานะสั้นๆ 1-2 ประโยค\",\n  \"recommendation\": \"คำแนะนำเชิงบวกในการออม 1-2 ประโยค\"\n}`;\n\n            const controller = new AbortController();\n            const timeoutId = setTimeout(() => controller.abort(), 6000);\n            const llmRes = await fetch(apiUrl, {\n                method: 'POST',\n                headers: {\n                    'Content-Type': 'application/json',\n                    'Authorization': `Bearer ${apiKey}`\n                },\n                body: JSON.stringify({\n                    model: llmModel,\n                    messages: [{ role: 'user', content: promptText }],\n                    temperature: 0.3\n                }),\n                signal: controller.signal\n            });\n            clearTimeout(timeoutId);\n\n            if (llmRes.ok) {\n                const llmData = await llmRes.json();\n                const content = llmData.choices?.[0]?.message?.content || llmData.candidates?.[0]?.content?.parts?.[0]?.text;\n                if (content) {\n                    const cleanJson = content.replace(/```json\\n?|```/g, '').trim();\n                    const parsed = JSON.parse(cleanJson);\n                    if (ai.isValidAnalysisPayload(parsed)) {\n                        analysisResult = { ...parsed, is_fallback: false };\n                    }\n                }\n            }\n        } catch (llmErr) {\n            node.warn('LLM call failed, switching to rule-based fallback: ' + (llmErr.message || llmErr));\n        }\n    }\n\n    if (!analysisResult) {\n        analysisResult = ai.generateRuleBasedAnalysis(goal, metrics);\n    }\n\n    // Save to database\n    const [insertRes] = await pool.execute(`\n        INSERT INTO ai_analyses (goal_id, status, risk_level, summary, recommendation)\n        VALUES (?, ?, ?, ?, ?)\n    `, [goalId, analysisResult.status, analysisResult.risk_level, analysisResult.summary, analysisResult.recommendation]);\n\n    msg.statusCode = 200;\n    msg.payload = {\n        id: insertRes.insertId,\n        goal_id: goalId,\n        status: analysisResult.status,\n        risk_level: analysisResult.risk_level,\n        summary: analysisResult.summary,\n        recommendation: analysisResult.recommendation,\n        is_fallback: analysisResult.is_fallback,\n        disclaimer: 'ข้อมูลจาก AI เป็นเพียงการวิเคราะห์ข้อมูลการออมเบื้องต้น ไม่ใช่คำแนะนำทางการเงินหรือการลงทุนจากผู้เชี่ยวชาญ'\n    };\n} catch (err) {\n    node.error('AI analyze error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 140,
+    "wires": [["ai_resp"]]
+  },
+  {
+    "id": "notif_resp",
+    "type": "http response",
+    "z": "tab_notifications",
+    "name": "Notifications Response",
+    "statusCode": "",
+    "headers": {
+        "content-type": "application/json; charset=utf-8"
+    },
+    "x": 780,
+    "y": 200,
+    "wires": []
+  },
+  {
+    "id": "notif_list_in",
+    "type": "http in",
+    "z": "tab_notifications",
+    "name": "GET /api/notifications",
+    "url": "/api/notifications",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 100,
+    "wires": [["notif_list_subflow"]]
+  },
+  {
+    "id": "notif_list_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_notifications",
+    "name": "Verify JWT",
+    "x": 350,
+    "y": 100,
+    "wires": [
+      ["notif_list_fn"],
+      ["notif_resp"]
+    ]
+  },
+  {
+    "id": "notif_list_fn",
+    "type": "function",
+    "z": "tab_notifications",
+    "name": "List Notifications Handler",
+    "func": "const db = global.get('db');\nconst pool = db.getPool();\n\ntry {\n    const [rows] = await pool.execute(`\n        SELECT n.*, g.name AS goal_name\n        FROM notifications n\n        JOIN savings_goals g ON n.goal_id = g.id\n        WHERE n.user_id = ?\n        ORDER BY n.created_at DESC\n        LIMIT 50\n    `, [msg.userId]);\n\n    const [unreadCountRow] = await pool.execute(`\n        SELECT COUNT(*) AS unread_count\n        FROM notifications\n        WHERE user_id = ? AND is_read = 0\n    `, [msg.userId]);\n\n    msg.statusCode = 200;\n    msg.payload = {\n        unread_count: Number(unreadCountRow[0].unread_count) || 0,\n        notifications: rows.map(r => ({\n            id: r.id,\n            goal_id: r.goal_id,\n            goal_name: r.goal_name,\n            type: r.type,\n            channel: r.channel,\n            title: r.title,\n            message: r.message,\n            is_read: Boolean(r.is_read),\n            notification_date: r.notification_date instanceof Date ? r.notification_date.toISOString().split('T')[0] : String(r.notification_date),\n            created_at: r.created_at\n        }))\n    };\n} catch (err) {\n    node.error('List notifications error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 90,
+    "wires": [["notif_resp"]]
+  },
+  {
+    "id": "notif_read_in",
+    "type": "http in",
+    "z": "tab_notifications",
+    "name": "PUT /api/notifications/:id/read",
+    "url": "/api/notifications/:id/read",
+    "method": "put",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 170,
+    "y": 200,
+    "wires": [["notif_read_subflow"]]
+  },
+  {
+    "id": "notif_read_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_notifications",
+    "name": "Verify JWT",
+    "x": 370,
+    "y": 200,
+    "wires": [
+      ["notif_read_fn"],
+      ["notif_resp"]
+    ]
+  },
+  {
+    "id": "notif_read_fn",
+    "type": "function",
+    "z": "tab_notifications",
+    "name": "Mark Read Handler",
+    "func": "const db = global.get('db');\nconst pool = db.getPool();\nconst notifId = Number(msg.req.params.id);\n\nif (!Number.isInteger(notifId) || notifId <= 0) {\n    msg.statusCode = 404;\n    msg.payload = { error: 'ไม่พบการแจ้งเตือนที่ระบุ' };\n    return msg;\n}\n\ntry {\n    const [res] = await pool.execute(`\n        UPDATE notifications\n        SET is_read = 1\n        WHERE id = ? AND user_id = ?\n    `, [notifId, msg.userId]);\n\n    if (res.affectedRows === 0) {\n        msg.statusCode = 404;\n        msg.payload = { error: 'ไม่พบการแจ้งเตือนที่ระบุ' };\n        return msg;\n    }\n\n    msg.statusCode = 200;\n    msg.payload = { success: true, id: notifId };\n} catch (err) {\n    node.error('Mark read error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 190,
+    "wires": [["notif_resp"]]
+  },
+  {
+    "id": "notif_readall_in",
+    "type": "http in",
+    "z": "tab_notifications",
+    "name": "PUT /api/notifications/read-all",
+    "url": "/api/notifications/read-all",
+    "method": "put",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 170,
+    "y": 300,
+    "wires": [["notif_readall_subflow"]]
+  },
+  {
+    "id": "notif_readall_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_notifications",
+    "name": "Verify JWT",
+    "x": 370,
+    "y": 300,
+    "wires": [
+      ["notif_readall_fn"],
+      ["notif_resp"]
+    ]
+  },
+  {
+    "id": "notif_readall_fn",
+    "type": "function",
+    "z": "tab_notifications",
+    "name": "Mark All Read Handler",
+    "func": "const db = global.get('db');\nconst pool = db.getPool();\n\ntry {\n    await pool.execute(`\n        UPDATE notifications\n        SET is_read = 1\n        WHERE user_id = ? AND is_read = 0\n    `, [msg.userId]);\n\n    msg.statusCode = 200;\n    msg.payload = { success: true };\n} catch (err) {\n    node.error('Mark all read error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 560,
+    "y": 290,
+    "wires": [["notif_resp"]]
+  },
+  {
+    "id": "notif_trigger_in",
+    "type": "http in",
+    "z": "tab_notifications",
+    "name": "POST /api/notifications/trigger-reminders",
+    "url": "/api/notifications/trigger-reminders",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 200,
+    "y": 400,
+    "wires": [["notif_trigger_subflow"]]
+  },
+  {
+    "id": "notif_trigger_subflow",
+    "type": "subflow:subflow_jwt_verify",
+    "z": "tab_notifications",
+    "name": "Verify JWT",
+    "x": 420,
+    "y": 400,
+    "wires": [
+      ["notif_trigger_fn"],
+      ["notif_resp"]
+    ]
+  },
+  {
+    "id": "notif_trigger_fn",
+    "type": "function",
+    "z": "tab_notifications",
+    "name": "Trigger Reminders Handler",
+    "func": "const db = global.get('db');\nconst calc = global.get('calc');\nconst dates = global.get('dates');\nconst pool = db.getPool();\nconst today = dates.getTodayBangkok();\n\ntry {\n    const [goals] = await pool.execute(`\n        SELECT g.*, COALESCE(SUM(t.amount), 0) AS tx_sum\n        FROM savings_goals g\n        LEFT JOIN savings_transactions t ON g.id = t.goal_id\n        WHERE g.user_id = ? AND g.status = 'active'\n        GROUP BY g.id\n    `, [msg.userId]);\n\n    let generatedCount = 0;\n\n    for (const g of goals) {\n        const metrics = calc.computeGoalMetrics(g, g.tx_sum, today);\n        if (metrics.status === 'completed') continue;\n\n        // 1. Deadline warning (within 7 days)\n        if (metrics.days_left > 0 && metrics.days_left <= 7) {\n            const [res] = await pool.execute(`\n                INSERT IGNORE INTO notifications (user_id, goal_id, type, channel, title, message, notification_date)\n                VALUES (?, ?, 'deadline_warning', 'app', ?, ?, ?)\n            `, [\n                msg.userId,\n                g.id,\n                'เตือนใกล้ครบกำหนด: ' + g.name,\n                `เป้าหมาย \"${g.name}\" เหลือเวลาอีกเพียง ${metrics.days_left} วัน ยอดคงเหลือ ${metrics.remaining.toLocaleString('th-TH')} บาท`,\n                today\n            ]);\n            if (res.affectedRows > 0) generatedCount++;\n        }\n\n        // 2. Daily reminder for on-track/at-risk goals\n        if (metrics.daily > 0 && !metrics.overdue) {\n            const [res] = await pool.execute(`\n                INSERT IGNORE INTO notifications (user_id, goal_id, type, channel, title, message, notification_date)\n                VALUES (?, ?, 'daily_reminder', 'app', ?, ?, ?)\n            `, [\n                msg.userId,\n                g.id,\n                'เตือนออมเงินประจำวัน: ' + g.name,\n                `วันนี้อย่าลืมออมเงิน ${metrics.daily.toLocaleString('th-TH')} บาท เพื่อให้เป็นไปตามแผนนะครับ`,\n                today\n            ]);\n            if (res.affectedRows > 0) generatedCount++;\n        }\n    }\n\n    msg.statusCode = 200;\n    msg.payload = {\n        success: true,\n        generated_count: generatedCount,\n        date: today\n    };\n} catch (err) {\n    node.error('Trigger reminders error: ' + (err.message || err));\n    msg.statusCode = 500;\n    msg.payload = { error: 'เกิดข้อผิดพลาดภายในระบบ ไม่สามารถดำเนินการได้' };\n}\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 620,
+    "y": 390,
+    "wires": [["notif_resp"]]
   }
 ]
+

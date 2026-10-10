@@ -555,7 +555,8 @@ module.exports = {
         auth: require('/data/lib/auth.js'),
         calc: require('/data/lib/calc.js'),
         validate: require('/data/lib/validate.js'),
-        dates: require('/data/lib/dates.js')
+        dates: require('/data/lib/dates.js'),
+        ai: require('/data/lib/ai.js')
     },
 
     /** The maximum number of messages nodes will buffer internally as part of their

@@ -78,5 +78,35 @@ export interface GoalAnalysisData {
   goal: Goal;
   metrics: GoalMetrics;
   chart: ChartSeries;
-  latest_ai: any;
+  latest_ai: AIAnalysisResult | null;
+}
+
+export interface AIAnalysisResult {
+  id?: number;
+  goal_id: number;
+  status: 'completed' | 'on_track' | 'at_risk' | 'behind' | 'overdue';
+  risk_level: 'none' | 'low' | 'medium' | 'high';
+  summary: string;
+  recommendation: string;
+  is_fallback: boolean;
+  disclaimer: string;
+  created_at?: string;
+}
+
+export interface NotificationItem {
+  id: number;
+  goal_id: number;
+  goal_name?: string;
+  type: string;
+  channel: 'app' | 'line';
+  title: string;
+  message: string;
+  is_read: boolean;
+  notification_date: string;
+  created_at: string;
+}
+
+export interface NotificationsResponse {
+  unread_count: number;
+  notifications: NotificationItem[];
 }

@@ -2,7 +2,14 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
-import { Goal, SavingTransaction, DashboardData, GoalAnalysisData } from '../models/goal.models';
+import { 
+  Goal, 
+  SavingTransaction, 
+  DashboardData, 
+  GoalAnalysisData, 
+  AIAnalysisResult, 
+  NotificationsResponse 
+} from '../models/goal.models';
 
 @Injectable({
   providedIn: 'root'
@@ -53,5 +60,25 @@ export class GoalService {
 
   getGoalAnalysis(goalId: number): Observable<GoalAnalysisData> {
     return this.http.get<GoalAnalysisData>(`${this.apiUrl}/goals/${goalId}/analysis`);
+  }
+
+  triggerAIAnalysis(goalId: number): Observable<AIAnalysisResult> {
+    return this.http.post<AIAnalysisResult>(`${this.apiUrl}/goals/${goalId}/analyze`, {});
+  }
+
+  getNotifications(): Observable<NotificationsResponse> {
+    return this.http.get<NotificationsResponse>(`${this.apiUrl}/notifications`);
+  }
+
+  markNotificationRead(id: number): Observable<{ success: boolean; id: number }> {
+    return this.http.put<{ success: boolean; id: number }>(`${this.apiUrl}/notifications/${id}/read`, {});
+  }
+
+  markAllNotificationsRead(): Observable<{ success: boolean }> {
+    return this.http.put<{ success: boolean }>(`${this.apiUrl}/notifications/read-all`, {});
+  }
+
+  triggerReminders(): Observable<{ success: boolean; generated_count: number; date: string }> {
+    return this.http.post<{ success: boolean; generated_count: number; date: string }>(`${this.apiUrl}/notifications/trigger-reminders`, {});
   }
 }

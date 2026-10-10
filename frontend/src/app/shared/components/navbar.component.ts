@@ -34,6 +34,11 @@ import { AuthService } from '../../core/services/auth.service';
                 ➕ เพิ่มเป้าหมาย
               </a>
             </li>
+            <li class="nav-item">
+              <a class="nav-link" routerLink="/notifications" routerLinkActive="active">
+                🔔 การแจ้งเตือน
+              </a>
+            </li>
           </ul>
           <div class="d-flex align-items-center gap-3">
             @if (authService.currentUser(); as user) {
